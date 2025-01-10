@@ -1,6 +1,7 @@
 # response handler
 from web_handler import WebHandler
 from dialogflow_handler import Agent
+import spacy
 import hashlib
 import json
 import os
@@ -29,6 +30,11 @@ class ResponseHandler:
     def save_cache(self):
         with open(self.cache_file, 'w') as file:
             json.dump(self.cache, file)
+
+    def extract_key_phrases(self, query):
+        doc = self.nlp(query)
+        phrases = [chunk.text for chunk in doc.noun_chunks if any(token.pos_ in ['PROPN', 'NOUN'] for token in chunk)]
+        return phrases
 
     def handle(self, query):
         query_hash = self.hash_query(query)
