@@ -34,7 +34,7 @@ class Core:
         self.audio = pyaudio.PyAudio()
         self.model = self.load_vosk_model()
         self.recognizer = KaldiRecognizer(self.model, 16000)
-        self.res_handler = ResponseHandler(self)
+        self.res_handler = ResponseHandler()
 
     def load_vosk_model(self):
         if not os.path.exists(self.model_path):
