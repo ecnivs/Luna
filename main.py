@@ -50,7 +50,7 @@ class Core:
         try:
             self.tts.tts_to_file(text,
                     file_path="audio/output.wav",
-                    speaker_wav="audio/speaker.wav",
+                    speaker_wav="audio/speaker2.wav",
                     language="en")
             self.play_audio("output.wav")
         except Exception as e:
