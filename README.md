@@ -7,7 +7,7 @@
 * **Secured 4th Place** in SmashHack 2024 - A testament to our innovative approach to cybersecurity and AI integration
 
 ## 🌟 Overview
-Luna AI is a comprehensive cybersecurity solution that empowers organizations with advanced tools to combat cyber threats. Our AI-driven approach combines smart detection, robust protection, and proactive prevention, all tailored for the modern threat landscape.
+**Luna AI** is a cybersecurity-focused implementation of [Blossom](https://github.com/ecnivs/Blossom). While the core remains the same, Luna AI enhances its capabilities with advanced tools to detect, protect, and prevent cyber threats.
 
 ## 👥 Team Epsilon
 * [Vince Swu](https://github.com/ecnivs)
