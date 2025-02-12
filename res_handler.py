@@ -1,74 +1,83 @@
-# response handler
-from web_handler import WebHandler
-from dialogflow_handler import Agent
-import spacy
+# Response Handler
+from collections import Counter
+from nltk.corpus import stopwords
+from nltk.stem import PorterStemmer
+from llm_handler import LlmHandler
+from settings import *
 import hashlib
-import json
-import os
 import random
 
 class ResponseHandler:
-    def __init__(self):
-        self.web = WebHandler()
-        self.agent = Agent('key.json', 'blossom-jwv9')
-        self.nlp = spacy.load("en_core_web_sm")
-        self.cache_file = "cache.json"
+    def __init__(self, core):
+        self.core = core
+        self.llm = LlmHandler()
         self.cache = self.load_cache()
+        self.stemmer = PorterStemmer()
 
-    def hash_query(self, query):
+    @staticmethod
+    def hash_query(query):
         return hashlib.sha256(query.encode()).hexdigest()
 
-    def load_cache(self):
-        if not os.path.exists(self.cache_file):
-            with open(self.cache_file, 'w') as file:
+    @staticmethod
+    def load_cache():
+        if not os.path.exists(CACHE_FILE):
+            with open(CACHE_FILE, 'w') as file:
                 json.dump({}, file)
             return {}
-        else:
-            with open(self.cache_file, 'r') as file:
-                return json.load(file)
+
+        with open(CACHE_FILE, 'r') as file:
+            return json.load(file)
 
     def save_cache(self):
-        with open(self.cache_file, 'w') as file:
+        with open(CACHE_FILE, 'w') as file:
             json.dump(self.cache, file)
 
     def extract_key_phrases(self, query):
-        doc = self.nlp(query)
-        phrases = [chunk.text for chunk in doc.noun_chunks if any(token.pos_ in ['PROPN', 'NOUN'] for token in chunk)]
-        return phrases
+        stop_words = set(stopwords.words('english'))
+        words = re.sub(r'[^a-zA-Z\s]', '', query.lower()).split()
+        word_counts = Counter([self.stemmer.stem(word) for word in words if word not in stop_words])
+        result = list(word_counts.keys())
+        if not result:
+            return query.split()
+        if result and result[0] in EXCLUDED_PREFIXES:
+            result.pop(0)
+        return result
 
-    def handle(self, query):
-        query_hash = self.hash_query(query)
-        agent_response = self.agent.get_response(query)
-        response = None
-
-        # check for timeout
-        if agent_response is not None:
-            if query_hash in self.cache:
-                detected_intent = self.cache[query_hash]['intent']
-                cached_responses = self.cache[detected_intent]
-                if cached_responses:
-                    return f'{random.choice(cached_responses)}'
-            return "Request timed out. Please check your internet connection."
-
-        if 'web.search' in self.agent.detected_intent:
-            key_phrases = str(self.extract_key_phrases(query))
-            if not key_phrases.strip() == "":
-                response = self.web.search(key_phrases)
-            else:
-                response =  self.web.search(query)
-
-        if not response:
-            response = self.agent.fulfillment_text
-
-        # cache responses
-        detected_intent = self.agent.detected_intent
-        if detected_intent not in self.cache:
-            self.cache[detected_intent] = []
-
-        if response not in self.cache[detected_intent]:
-            self.cache[detected_intent].append(response)
-
+    def add_response(self, query, query_hash, intent):
+        response = "".join(self.llm.get_response(query))
+        if response not in self.cache[intent]:
+            self.cache[intent].append(response)
         self.cache[query_hash] = {
-            'intent': detected_intent
+            'intent': intent
         }
-        return response
+
+    def handle(self, query, nocache = False):
+        query_hash = self.hash_query(query.lower())
+
+        if query_hash in self.cache and not nocache:
+            detected_intent = self.cache[query_hash]['intent']
+            cached_responses = self.cache[detected_intent]
+            if len(cached_responses) > 2:
+                threading.Thread(target=self.add_response, args=(query, query_hash, detected_intent)).start()
+                sentences = re.split(r'(?<=[.!?])\s+', f'{random.choice(cached_responses)}')
+                for sentence in sentences:
+                    self.core.speech_queue.put(sentence)
+                return
+
+        response = []
+        for chunk in self.llm.get_response(query):
+            if chunk.strip():
+                self.core.speech_queue.put(chunk)
+                response.append(chunk)
+
+        response = ' '.join(response)
+        intent_name = '.'.join(self.extract_key_phrases(query))
+
+        if 'repeat' not in intent_name:
+            if intent_name not in self.cache:
+                self.cache[intent_name] = []
+            if response not in self.cache[intent_name]:
+                self.cache[intent_name].append(response)
+            self.cache[query_hash] = {
+                'intent': intent_name
+            }

@@ -1,67 +1,64 @@
-# Luna
-import os
+# Blossom
 from res_handler import ResponseHandler
+from settings import *
 import pyaudio
-import json
-import threading
 from vosk import Model, KaldiRecognizer
 import time
 from TTS.api import TTS
-import logging
 import torch
 import wave
-
-logging.basicConfig(level=logging.DEBUG, 
-                    format='%(levelname)s - %(message)s',
-                    force=True)
+import queue
+import uuid
+import glob
 
 class Core:
-    def __init__(self, name):
-        self.name = name
-        self.model_path = 'vosk-model'
-        self.threads = []
+    def __init__(self):
+        self.name = NAME
+        self.model = VOSK_MODEL
         self.query = None
         self.called = False
-        self.call_words = ["hey", "okay", "hi", "hello", "yo", "listen", "attention", "are you there"]
+        self.is_playing = False
 
         self.on_init()
 
     def on_init(self):
         self.lock = threading.Lock()
+        self.condition = threading.Condition()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.tts = TTS(model_name="tts_models/multilingual/multi-dataset/xtts_v2").to(self.device)
+        self.tts = TTS(model_name=TTS_MODEL).to(self.device)
         self.shutdown_flag = threading.Event()
         self.audio = pyaudio.PyAudio()
         self.model = self.load_vosk_model()
-        self.recognizer = KaldiRecognizer(self.model, 16000)
-        self.res_handler = ResponseHandler()
+        self.recognizer = KaldiRecognizer(self.model, SAMPLING_RATE)
+        self.handler = ResponseHandler(self)
+        self.speech_queue = queue.Queue()
+        self.audio_queue = queue.Queue()
 
     def load_vosk_model(self):
-        if not os.path.exists(self.model_path):
-            logging.info(f'Model not found at {self.model_path}, please check the path.')
+        if not os.path.exists(self.model):
+            logging.info(f'Model not found at {self.model}, please check the path.')
             exit(1)
         try:
-            return Model(self.model_path)
+            return Model(self.model)
         except ValueError as e:
             logging.error(f'Error loading Vosk model: {e}')
             exit(1)
 
     def speak(self, text):
         try:
-            self.tts.tts_to_file(text,
-                    file_path="audio/output.wav",
-                    speaker_wav="audio/speaker2.wav",
-                    language="en")
-            self.play_audio("output.wav")
+            output_wav = f"{uuid.uuid4().hex}_temp.wav"
+            self.tts.tts_to_file(text, file_path = output_wav, speaker_wav = SPEAKER_WAV, language = "en")
+            self.audio_queue.put(output_wav)
         except Exception as e:
-            logging.error(f'Error in TTS: {e}')
+            logging.error(f"TTS error: {e}")
 
     def play_audio(self, filename):
         def audio_thread():
+            self.is_playing = True
             stream = None
             try:
-                with wave.open(f'audio/{filename}', 'rb') as wf:
-                    chunk_size = 1024
+                with wave.open(filename, 'rb') as wf:
+                    chunk_size = min(CHUNK_SIZE, wf.getnframes())
                     stream = self.audio.open(
                         format=self.audio.get_format_from_width(wf.getsampwidth()),
                         channels=wf.getnchannels(),
@@ -69,17 +66,17 @@ class Core:
                         output=True,
                         frames_per_buffer=chunk_size)
 
-                    data = wf.readframes(chunk_size)
-                    while data:
-                        while stream.get_write_available() < len(data):
-                            time.sleep(0.001)
-                        stream.write(data)
-                        data = wf.readframes(chunk_size)
-
+                    data = wf.readframes(wf.getnframes())
+                    stream.write(data)
+                    time.sleep(0.1)
                     stream.stop_stream()
 
+                if "_temp" in filename:
+                    os.remove(filename)
+                self.is_playing = False
+
             except Exception as e:
-                logging.error(f'Error playing audio file {filename}: {e}')
+                logging.error(f'Error during playback of {filename}: {e}')
             finally:
                 if stream is not None:
                     if stream.is_active():
@@ -90,17 +87,27 @@ class Core:
 
     def recognize_speech(self):
         stream = self.audio.open(format=pyaudio.paInt16,
-                        channels=1,
-                        rate=16000,
-                        input=True,
-                        frames_per_buffer=4096)
+                        channels = 1,
+                        rate = RATE,
+                        input = True,
+                        frames_per_buffer = FRAMES_PER_BUFFER)
         stream.start_stream()
-        
+
+        # load model into memory
+        self.speech_queue.put("".join(self.handler.llm.get_response(f"Hey {self.name}")))
+
         logging.info("Listening...")
 
         try:
             while not self.shutdown_flag.is_set():
-                data = stream.read(4096, exception_on_overflow=False)
+
+                # halt if audio is being played
+                with self.condition:
+                    while not self.audio_queue.empty():
+                        self.condition.wait()
+
+                data = stream.read(FRAMES_PER_BUFFER, exception_on_overflow=EXCEPTION_ON_OVERFLOW)
+
                 if self.recognizer.AcceptWaveform(data):
                     result = json.loads(self.recognizer.Result())
                     if 'text' in result and result['text'].strip() != "":
@@ -112,19 +119,21 @@ class Core:
                     if not self.query:
                         continue
 
+                    # lowercase and split
                     query_lower = self.query.lower().strip()
                     query_words = query_lower.split()
                     name_lower = self.name.lower()
 
-                    if any(word in query_lower for word in self.call_words):
-                        for word in self.call_words:
+                    # hotword detection
+                    if any(word in query_lower for word in CALL_WORDS):
+                        for word in CALL_WORDS:
                             if f'{word} {name_lower}' in query_lower:
                                 self.called = True
                                 logging.info("call detected!")
                                 _, query = query_lower.split(f'{word} {name_lower}', 1)
                                 if query.strip() == "" or len(query.strip().split()) < 2:
                                     self.query = None
-                                    self.play_audio("start.wav")
+                                    self.play_audio(START_WAV)
                                 else:
                                     self.query = query.strip()
                                 break
@@ -134,11 +143,6 @@ class Core:
                             self.called = True
                             logging.info("call detected!")
                             self.query = " ".join(query_words[1:])
-
-                        elif query_words[-1] == name_lower and len(query_words) > 2:
-                            self.called = True
-                            logging.info("call detected!")
-                            self.query = " ".join(query_words[:-1])
 
                 time.sleep(0.1)
         except IOError as e:
@@ -151,33 +155,49 @@ class Core:
             self.audio.terminate()
             logging.info("Audio stream terminated.")
 
+    def process_queue(self):
+        if not self.speech_queue.empty():
+            self.speak(self.speech_queue.get())
+        if not self.audio_queue.empty():
+            if not self.is_playing:
+                self.play_audio(self.audio_queue.get())
+        elif not self.is_playing:
+            time.sleep(0.1)
+            with self.condition:
+                self.condition.notify()
+
     def run(self):
         self.speech_thread = threading.Thread(target=self.recognize_speech, daemon=True)
-        self.threads.append(self.speech_thread)
         self.speech_thread.start()
 
         try:
             while True:
+                self.process_queue()
                 if self.called:
                     with self.lock:
                         if self.query:
                             logging.info("processing...")
-                            self.play_audio("end.wav")
+                            self.play_audio(END_WAV)
                             self.called = False
-                            self.speak(self.res_handler.handle(self.query))
+                            self.handler.handle(self.query)
                         self.query = None
                 time.sleep(0.1)
 
         except KeyboardInterrupt:
             logging.info("Shutting down...")
             self.shutdown_flag.set()
-            self.res_handler.save_cache()
+            self.handler.save_cache()
+            self.handler.llm.session.close()
+            self.handler.llm.unload_model()
 
-            if self.threads:
-                for thread in self.threads:
-                    thread.join()
+            files = glob.glob("*_temp.wav")
+            for file in files:
+                os.remove(file)
+
+            if self.speech_thread:
+                self.speech_thread.join()
             logging.info("All threads terminated.")
 
 if __name__ == '__main__':
-    core = Core('Luna')
+    core = Core()
     core.run()

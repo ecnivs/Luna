@@ -3,7 +3,6 @@
 
 ![image](https://github.com/user-attachments/assets/94d631d6-99a5-4d01-879d-cacb67e13c8f)
 
-
 ## 🏆 Recognition
 * **Secured 4th Place** in SmashHack 2024 - A testament to our innovative approach to cybersecurity and AI integration
 
