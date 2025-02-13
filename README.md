@@ -4,7 +4,7 @@
 ![image](https://github.com/user-attachments/assets/94d631d6-99a5-4d01-879d-cacb67e13c8f)
 
 ## 🏆 Recognition
-> Secured **4th Place** in **SmashHack 2024** - A testament to our innovative approach to cybersecurity and AI integration
+> Secured **All India 4th Place** in **SmashHack 2024** - A testament to our innovative approach to cybersecurity and AI integration
 
 ## 🌟 Overview
 **Luna AI** is a cybersecurity-focused implementation of [Blossom](https://github.com/ecnivs/Blossom). While the core remains the same, Luna AI enhances its capabilities with advanced tools to detect, protect, and prevent cyber threats.
