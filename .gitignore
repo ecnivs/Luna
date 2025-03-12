@@ -4,6 +4,5 @@ vosk-model/
 *_temp.wav
 .python-version
 .venv/
-*.txt
 *_test.py
 *.env

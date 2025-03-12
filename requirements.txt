@@ -1,0 +1,7 @@
+requests
+nltk
+transformers
+torch
+pyaudio
+vosk
+TTS
